@@ -1,6 +1,10 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering}
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use sysinfo::{System, RefreshKind};
 
 pub struct MemoryLeak {
     stop_flag: Arc<AtomicBool>,
@@ -14,33 +18,49 @@ impl MemoryLeak {
 
         let handle = thread::spawn(move || {
             let mut data: Vec<Vec<u8>> = Vec::new();
-            let total_ram = sysinfo::System::new_all().total_memory(); // en KB
-            let objetivo = (total_ram as f32 * (porcentaje / 100.0)) as usize;
 
-            let mut acumulado = 0;
-            let bloque_tamano = 100 * 1024 * 1024; // 100 MB
+            let mut sys = System::new_with_specifics(
+                RefreshKind::new().with_memory(sysinfo::MemoryRefreshKind::new())
+            );
 
-            while !flag_clone.load(Ordering::Relaxed) && acumulado < objetivo {
+            sys.refresh_memory();
+
+            let total_ram = sys.total_memory(); // en KB
+            let objetivo_total = (total_ram as f32 * (porcentaje / 100.0)) as u64;
+
+            let bloque_tamano_kb = 10 * 1024; // 10 MB en KB
+            let bloque_tamano = bloque_tamano_kb * 1024; // en bytes
+
+            while !flag_clone.load(Ordering::Relaxed) {
+                sys.refresh_memory();
+                let usada_actual = sys.used_memory(); // en KB
+
+                if usada_actual >= objetivo_total {
+                    println!("Se alcanzó el objetivo de uso de memoria: {} KB", usada_actual);
+                    break;
+                }
+
                 let mut bloque = Vec::new();
 
-                // Intentamos reservar sin hacer panic
-                if bloque.try_reserve_exact(bloque_tamano).is_ok() {
-                    bloque.resize(bloque_tamano, 0);
-                    acumulado += bloque.len() / 1024; // KB
+                if bloque.try_reserve_exact(bloque_tamano as usize).is_ok() {
+                    bloque.resize(bloque_tamano as usize, 0);
                     data.push(bloque);
 
-                    println!("Memoria acumulada: {} KB / {} KB", acumulado, objetivo);
+                    println!(
+                        "Memoria usada: {} KB / Objetivo: {} KB",
+                        usada_actual, objetivo_total
+                    );
 
                     if progresivo {
                         thread::sleep(Duration::from_millis(200));
                     }
                 } else {
-                    println!("No se pudo reservar más memoria. Deteniendo fuga para evitar crash.");
+                    println!("No se pudo reservar más memoria. Deteniendo para evitar crash.");
                     break;
                 }
             }
 
-            // Mantener la memoria ocupada hasta que se detenga
+            // Mantener ocupada la memoria hasta que se detenga el ataque
             while !flag_clone.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(500));
             }

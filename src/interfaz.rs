@@ -49,11 +49,14 @@ struct AppState {
     cpu_spike_handle: Option<CpuSpike>,
     memory_handle: Option<MemoryLeak>,
     ddos_handle: Option<DDoS>,
+    //Monitorei del cpu
     cpu_monitor: CpuMonitor,
     cpu_usage: f32,
+    ultima_actualizacion_cpu: Instant,
+    //Monitoreo de la memoria
     memoria_monitor: MemoriaInfo,
     memoria_usage: f32,
-    //Trafico
+    //Monitoreo tarfico
     monitor: MonitorRed,
     trafico_actual: TraficoRed,
 }
@@ -75,8 +78,11 @@ impl Default for AppState {
             cpu_spike_handle: None,
             memory_handle: None,
             ddos_handle: None,
+            //Cpu
             cpu_monitor: CpuMonitor::new(),
             cpu_usage: 0.0,
+            ultima_actualizacion_cpu: Instant::now(),
+            //Memoria
             memoria_monitor: MemoriaInfo::new(),
             memoria_usage: 0.0,
             //Trafico
@@ -147,7 +153,6 @@ impl AppState {
         }
         if self.activar_fuga_memoria {
             self.memory_handle = Some(MemoryLeak::new(self.fuga_memoria_porcentaje_maximo, true));
-
 
             self.tiempo_inicio_memoria = Some(Instant::now());
             self.log_actividades.push_str(&format!(
@@ -233,6 +238,8 @@ impl AppState {
             if ui.button("Detener Todo").clicked() {
                 self.detener_todo();
             }
+            if ui.button("Generar datos sinteticos").clicked() {
+            }
             if ui.button("Limpiar Log").clicked() {
                 self.log_actividades.clear();
             }
@@ -243,7 +250,6 @@ impl AppState {
         egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
             ui.label(&self.log_actividades);
         });
-
 
         ui.heading("Uso de CPU en Tiempo Real");
         ui.add(egui::ProgressBar::new(self.cpu_usage / 100.0)
@@ -289,14 +295,17 @@ impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
         
         // Actualizacion de el monitoreo
-        self.cpu_usage = self.cpu_monitor.get_cpu_usage();
+        if self.ultima_actualizacion_cpu.elapsed().as_secs_f32() >= 0.5 {
+            self.cpu_usage = self.cpu_monitor.get_cpu_usage();
+            self.ultima_actualizacion_cpu = Instant::now();
+        }
+
 
         self.memoria_monitor.actualizar();
         self.memoria_usage = self.memoria_monitor.porcentaje_uso_memoria();    
 
         self.trafico_actual = self.monitor.actualizar();
 
-        
         egui::CentralPanel::default().show(ctx, |ui| {
             self.ui(ui);
         });
