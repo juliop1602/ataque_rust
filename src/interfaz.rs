@@ -4,6 +4,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use chrono::Local;
 use std::time::Instant;
+use rand::Rng;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::thread::{self, JoinHandle};
+use egui::{Align, Layout, TopBottomPanel};
 
 //Ataques
 use crate::cpu_spike::CpuSpike;
@@ -59,6 +63,11 @@ struct AppState {
     //Monitoreo tarfico
     monitor: MonitorRed,
     trafico_actual: TraficoRed,
+    //Manejo de datos 
+    generando_datos: bool,
+    detener_datos_flag: Arc<AtomicBool>,
+    handle_datos: Option<JoinHandle<()>>,
+     pub modo_oscuro: bool,
 }
 
 impl Default for AppState {
@@ -91,6 +100,11 @@ impl Default for AppState {
                 recibido: 0,
                 enviado: 0,
             },
+            //Manejo de datos sinteticos
+            generando_datos: false,
+            detener_datos_flag: Arc::new(AtomicBool::new(false)),
+            handle_datos: None,
+            modo_oscuro: true,
         }
     }
 }
@@ -104,26 +118,6 @@ impl AppState {
 
         self.ataques_activos = true;
         self.log_actividades.push_str("[INFO] Iniciando ataques seleccionados...\n");
-        
-        let cpu = if self.activar_cpu_spike {
-            Some(self.cpu_spike_porcentaje)
-        } else {
-            None
-        };
-
-        let memoria = if self.activar_fuga_memoria {
-            Some(self.fuga_memoria_porcentaje_maximo)
-        } else {
-            None
-        };
-
-        let red = if self.activar_ddos {
-            Some(format!("{} solicitudes/s", self.ddos_solicitudes_por_segundo))
-        } else {
-            None
-        };
-
-        enviar_metricas(cpu, memoria, red, 5000);
         
        if self.activar_ddos {
             match self.ddos_solicitudes_por_segundo.parse::<usize>() {
@@ -197,10 +191,57 @@ impl AppState {
             self.log_actividades.push_str("[INFO] No hay ataques activos.\n");
         }
     }
+    fn iniciar_datos_sinteticos(&mut self) {
+        if self.generando_datos {
+            self.log_actividades.push_str("[INFO] Ya se están generando datos sintéticos.\n");
+            return;
+        }
+
+        self.log_actividades.push_str("[INFO] Iniciando generación de datos sintéticos...\n");
+
+        let detener_flag = Arc::clone(&self.detener_datos_flag);
+        detener_flag.store(false, Ordering::SeqCst);
+
+        let handle = thread::spawn(move || {
+            while !detener_flag.load(Ordering::SeqCst) {
+                let (cpu_sintetico, memoria_sintetica, red_sintetica) = generar_datos_sinteticos();
+                enviar_metricas(cpu_sintetico, memoria_sintetica, red_sintetica, 5000);
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        });
+
+        self.generando_datos = true;
+        self.handle_datos = Some(handle);
+    }
+
+    fn detener_datos_sinteticos(&mut self) {
+    if !self.generando_datos {
+        self.log_actividades.push_str("[INFO] No hay datos sintéticos en ejecución.\n");
+        return;
+    }
+
+    self.log_actividades.push_str("[INFO] Deteniendo generación de datos sintéticos...\n");
+    self.detener_datos_flag.store(true, Ordering::SeqCst);
+
+    if let Some(handle) = self.handle_datos.take() {
+        let _ = handle.join(); // Espera a que el hilo termine
+    }
+
+    self.generando_datos = false;
+}
 
     fn ui(&mut self, ui: &mut egui::Ui) {
+        TopBottomPanel::top("top_bar").show(ui.ctx(), |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let label = if self.modo_oscuro { "🌙 Oscuro" } else { "🌞 Claro" };
+                if ui.selectable_label(self.modo_oscuro, label).clicked() {
+                    self.modo_oscuro = !self.modo_oscuro;
+                }
+    });
+        });
+        
         ui.heading("Panel de Control de Ataques");
-        ui.separator();
+        
 
         ui.checkbox(&mut self.activar_ddos, "DDoS");
         ui.checkbox(&mut self.activar_cpu_spike, "CPU Spike");
@@ -238,7 +279,11 @@ impl AppState {
             if ui.button("Detener Todo").clicked() {
                 self.detener_todo();
             }
-            if ui.button("Generar datos sinteticos").clicked() {
+            if ui.button("Generar Datos Sintéticos").clicked() {
+                self.iniciar_datos_sinteticos();
+            }
+            if ui.button("Detener Datos Sintéticos").clicked() {
+                self.detener_datos_sinteticos();
             }
             if ui.button("Limpiar Log").clicked() {
                 self.log_actividades.clear();
@@ -276,6 +321,33 @@ impl AppState {
     }
 }
 
+fn generar_datos_sinteticos() -> (Option<f32>, Option<f32>, Option<String>) {
+    let mut rng = rand::thread_rng();
+
+    let cpu: Option<f32> = if rng.gen_bool(0.8) {
+        Some(rng.gen_range(5.0..=100.0)as f32)
+    } else {
+        None
+    };
+
+    let memoria: Option<f32> = if rng.gen_bool(0.7) {
+        Some(rng.gen_range(0.0..=90.0)as f32)
+    } else {
+        None
+    };
+
+    let red = if rng.gen_bool(0.6) {
+    let solicitudes_por_segundo = rng.gen_range(5000..=20000);
+    Some(format!("{} req/s", solicitudes_por_segundo))
+    } else {
+        None
+    };
+
+
+    (cpu, memoria, red)
+}
+
+
 fn registrar_en_csv(tipo: &str, duracion: u64) {
     let fecha = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let linea = format!("{},{},{}s\n", fecha, tipo, duracion);
@@ -293,6 +365,12 @@ fn registrar_en_csv(tipo: &str, duracion: u64) {
 
 impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
+
+        if self.modo_oscuro {
+            ctx.set_visuals(egui::Visuals::dark());
+        } else {
+            ctx.set_visuals(egui::Visuals::light());
+        }
         
         // Actualizacion de el monitoreo
         if self.ultima_actualizacion_cpu.elapsed().as_secs_f32() >= 0.5 {
