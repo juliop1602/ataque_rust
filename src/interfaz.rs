@@ -11,8 +11,8 @@ use egui::{Align, Layout, TopBottomPanel};
 
 //Ataques
 use crate::cpu_spike::CpuSpike;
-use crate::ddos::DDoS;
 use crate::memoria::MemoryLeak;
+
 
 //Comunicacion
 use crate::comunicacion::enviar_metricas;
@@ -20,7 +20,6 @@ use crate::comunicacion::enviar_metricas;
 //Monitoreo
 use crate::monitor_cpu::CpuMonitor;
 use crate::monitor_memoria::MemoriaInfo;
-use crate::monitor_trafico::{MonitorRed, TraficoRed};
 
 enum TipoAtaque {
     Ddos,
@@ -39,20 +38,23 @@ impl fmt::Display for TipoAtaque {
 }
 
 struct AppState {
+    //Botones
     activar_ddos: bool,
     activar_cpu_spike: bool,
     activar_fuga_memoria: bool,
+    //Intensidad
     ddos_solicitudes_por_segundo: String,
     cpu_spike_porcentaje: f32,
     fuga_memoria_porcentaje_maximo: f32,
     log_actividades: String,
     ataques_activos: bool,
+    //Tiempos de cada ataque
     tiempo_inicio_ddos: Option<Instant>,
     tiempo_inicio_cpu: Option<Instant>,
     tiempo_inicio_memoria: Option<Instant>,
+    //Manipular ataques
     cpu_spike_handle: Option<CpuSpike>,
     memory_handle: Option<MemoryLeak>,
-    ddos_handle: Option<DDoS>,
     //Monitorei del cpu
     cpu_monitor: CpuMonitor,
     cpu_usage: f32,
@@ -60,9 +62,6 @@ struct AppState {
     //Monitoreo de la memoria
     memoria_monitor: MemoriaInfo,
     memoria_usage: f32,
-    //Monitoreo tarfico
-    monitor: MonitorRed,
-    trafico_actual: TraficoRed,
     //Manejo de datos 
     generando_datos: bool,
     detener_datos_flag: Arc<AtomicBool>,
@@ -86,7 +85,6 @@ impl Default for AppState {
             tiempo_inicio_memoria: None,
             cpu_spike_handle: None,
             memory_handle: None,
-            ddos_handle: None,
             //Cpu
             cpu_monitor: CpuMonitor::new(),
             cpu_usage: 0.0,
@@ -94,12 +92,6 @@ impl Default for AppState {
             //Memoria
             memoria_monitor: MemoriaInfo::new(),
             memoria_usage: 0.0,
-            //Trafico
-            monitor: MonitorRed::new(),
-            trafico_actual: TraficoRed {
-                recibido: 0,
-                enviado: 0,
-            },
             //Manejo de datos sinteticos
             generando_datos: false,
             detener_datos_flag: Arc::new(AtomicBool::new(false)),
@@ -122,10 +114,10 @@ impl AppState {
        if self.activar_ddos {
             match self.ddos_solicitudes_por_segundo.parse::<usize>() {
                 Ok(pps) => {
-                    self.ddos_handle = Some(DDoS::new(pps));
+                    
                     self.tiempo_inicio_ddos = Some(Instant::now());
                     self.log_actividades.push_str(&format!(
-                        "- DDoS: {} solicitudes/seg iniciado\n",
+                        "- DDoS UDP: {} solicitudes/seg iniciado\n",
                         pps
                     ));
                 }
@@ -163,7 +155,7 @@ impl AppState {
             self.ataques_activos = false;
             
             if self.tiempo_inicio_ddos.is_some() {
-                if let Some(ddos)=self.ddos_handle.take() {ddos.detener();}
+                //Deteniedo con la funcion del modulo
 
                 let duracion = self.tiempo_inicio_ddos.unwrap().elapsed().as_secs();
                 registrar_en_csv("DDoS", duracion);
@@ -179,7 +171,7 @@ impl AppState {
                 self.tiempo_inicio_cpu = None;
             }
             if self.tiempo_inicio_memoria.is_some() {
-
+                //Deteniedo con la funcion del modulo
                 if let Some(memoria) = self.memory_handle.take() {memoria.detener();}
 
                 let duracion = self.tiempo_inicio_memoria.unwrap().elapsed().as_secs();
@@ -233,7 +225,7 @@ impl AppState {
     fn ui(&mut self, ui: &mut egui::Ui) {
         TopBottomPanel::top("top_bar").show(ui.ctx(), |ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let label = if self.modo_oscuro { "🌙 Oscuro" } else { "🌞 Claro" };
+                let label = if self.modo_oscuro { "Oscuro" } else { "Claro" };
                 if ui.selectable_label(self.modo_oscuro, label).clicked() {
                     self.modo_oscuro = !self.modo_oscuro;
                 }
@@ -306,17 +298,6 @@ impl AppState {
             .text(format!("{:.1}%", self.memoria_usage)));
         ui.separator();
 
-        ui.heading("Monitoreo de Tráfico de Red");
-            ui.label(format!(
-                "Total recibido: {:.2} MB",
-                self.trafico_actual.recibido as f64 / 1_048_576.0
-            ));
-            ui.label(format!(
-                "Total enviado: {:.2} MB",
-                self.trafico_actual.enviado as f64 / 1_048_576.0
-            ));
-
-        ui.separator();
 
     }
 }
@@ -366,6 +347,7 @@ fn registrar_en_csv(tipo: &str, duracion: u64) {
 impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
 
+        //Estilo
         if self.modo_oscuro {
             ctx.set_visuals(egui::Visuals::dark());
         } else {
@@ -378,11 +360,9 @@ impl eframe::App for AppState {
             self.ultima_actualizacion_cpu = Instant::now();
         }
 
-
         self.memoria_monitor.actualizar();
         self.memoria_usage = self.memoria_monitor.porcentaje_uso_memoria();    
 
-        self.trafico_actual = self.monitor.actualizar();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.ui(ui);
